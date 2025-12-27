@@ -1,6 +1,129 @@
 import numpy as np
 import real_data_calibration as rdc
 import matplotlib.pyplot as plt
+from scipy.stats import jarque_bera, kstest, norm, t
+import scipy.stats as stats
+
+class StatisticalValidator:
+    def __init__(self, real_returns, simulated_prices):
+        self.real_returns = real_returns
+        self.sim_prices = simulated_prices
+        
+    def run_normality_tests(self):
+        """
+        Hypothesis: Carbon returns are NOT Normal (Gaussian).
+        H0 (Null Hypothesis): Returns follow a Normal Distribution.
+        H1 (Alternative): Returns contain Jumps/Fat Tails.
+        """
+        print("\n--- STATISTICAL SIGNIFICANCE TESTS (Jumps vs. Noise) ---")
+        
+        # 1. Jarque-Bera Test (The standard for checking Fat Tails)
+        # It measures Skewness and Kurtosis. 
+        jb_stat, jb_p_value = jarque_bera(self.real_returns)
+        
+        print(f"1. Jarque-Bera Test:")
+        print(f"   - Statistic: {jb_stat:.2f}")
+        print(f"   - P-Value:   {jb_p_value:.5f}")
+        
+        if jb_p_value < 0.05:
+            print("   -> RESULT: REJECT H0. Data is NON-NORMAL (Jumps are statistically significant).")
+            print("   -> Implication: Black-Scholes would fail here. Jump-Diffusion is required.")
+        else:
+            print("   -> RESULT: FAIL TO REJECT H0. Data looks Normal.")
+
+    def run_goodness_of_fit(self):
+        """
+        2. Kolmogorov-Smirnov Test (KS Test)
+        Checks if real data fits a Normal Distribution.
+        """
+        # Standardize returns
+        std_returns = (self.real_returns - np.mean(self.real_returns)) / np.std(self.real_returns)
+        ks_stat, ks_p_value = kstest(std_returns, 'norm')
+        
+        print(f"\n2. Kolmogorov-Smirnov Test:")
+        print(f"   - P-Value:   {ks_p_value:.5f}")
+        if ks_p_value < 0.05:
+            print("   -> RESULT: REJECT Normality. Confirms non-linear behavior.")
+            
+    def calculate_valuation_confidence(self, fair_value, confidence=0.95):
+        """
+        3. Monte Carlo Confidence Intervals
+        How sure are we about the valuation?
+        """
+        # Get terminal prices from the simulation matrix
+        terminal_prices = self.sim_prices[-1] 
+        
+        # Standard Error
+        std_err = np.std(terminal_prices) / np.sqrt(len(terminal_prices))
+        
+        # T-Score for 95% Confidence
+        df = len(terminal_prices) - 1
+        t_score = t.ppf((1 + confidence) / 2, df)
+        
+        margin_of_error = t_score * std_err
+        
+        lower_bound = fair_value - margin_of_error
+        upper_bound = fair_value + margin_of_error
+        
+        print(f"\n--- VALUATION CONFIDENCE INTERVAL ({confidence:.0%}) ---")
+        print(f"   Model Fair Value:  INR {fair_value:.2f}")
+        print(f"   Confidence Range: [INR {lower_bound:.2f} - INR {upper_bound:.2f}]")
+        print(f"   Margin of Error:   INR {margin_of_error:.2f}")
+        
+        return lower_bound, upper_bound
+
+class RigorousValidator(StatisticalValidator): # Extends your previous class
+    def run_qq_plot(self):
+        """
+        Visual Test: The Q-Q Plot.
+        If the Blue Dots deviate from the Red Line at the corners, 
+        it proves Fat Tails (Extreme Events) exist.
+        """
+        print("\n--- VISUAL VALIDATION (Q-Q Plot) ---")
+        plt.figure(figsize=(8, 6))
+        
+        # Compare Real Carbon Returns vs. Theoretical Normal Distribution
+        stats.probplot(self.real_returns, dist="norm", plot=plt)
+        
+        plt.title("Q-Q Plot: Real Carbon Data vs. Normal Distribution")
+        plt.grid(True, alpha=0.3)
+        plt.savefig('qq_plot.png')
+        print("   -> Q-Q Plot saved to qq_plot.png")
+        print("   -> INTERPRETATION: Look at the tails (top right, bottom left).")
+        print("      If dots curl away from the red line, the '0.0 P-Value' is real.")
+
+    def run_3_sigma_test(self):
+        """
+        The 'Trader Sanity Check'.
+        Count the number of extreme days (> 3 Std Devs).
+        """
+        print("\n--- THE '3-SIGMA' REALITY CHECK ---")
+        
+        std_dev = np.std(self.real_returns)
+        mean = np.mean(self.real_returns)
+        
+        # Define thresholds
+        upper_limit = mean + 3 * std_dev
+        lower_limit = mean - 3 * std_dev
+        
+        # Count outliers
+        outliers = self.real_returns[(self.real_returns > upper_limit) | (self.real_returns < lower_limit)]
+        num_outliers = len(outliers)
+        total_days = len(self.real_returns)
+        
+        # Theoretical expectation under Normal Distribution
+        expected_normal = total_days * 0.0027 # 0.27% probability
+        
+        print(f"   Total Trading Days: {total_days}")
+        print(f"   Threshold (3x Sigma): +/- {3*std_dev:.2%}")
+        print(f"   Expected Outliers (if Normal): {expected_normal:.1f} days")
+        print(f"   ACTUAL Outliers Observed:      {num_outliers} days")
+        
+        if num_outliers > expected_normal * 2:
+            print("   -> RESULT: VALIDATED. Market creates 2x+ more shocks than Black-Scholes predicts.")
+            print("   -> This confirms that the '0.00000' P-Value is not a bug.")
+        else:
+            print("   -> RESULT: Suspicious. Data looks surprisingly normal.")
 
 class CarbonCreditValuator:
     def __init__(self, s0, mu, sigma, risk_free_rate=0.07):
@@ -168,10 +291,10 @@ if __name__ == "__main__":
 
     # --- VISUALIZATION: THE "RISK CONE" WITH REAL DATA ---
     print("\nGenerating Real-Data Risk Cone...")
-    sims = advisor.merton_jump_diffusion_simulation(T=2, dt=1/252, lambda_j=lam, jump_mean=j_mean, jump_std=j_std, n_sims=50)
+    sims = advisor.merton_jump_diffusion_simulation(T=2, dt=1/252, lambda_j=lam, jump_mean=j_mean, jump_std=j_std, n_sims=1000) # Increased N for robust stats
 
     plt.figure(figsize=(10, 6))
-    plt.plot(sims, color='green', alpha=0.1)
+    plt.plot(sims[:, :50], color='green', alpha=0.1) # Plot only 50 paths to avoid clutter
     plt.plot(np.mean(sims, axis=1), color='black', linewidth=2, label=f'Expected Price Path (Real $\lambda$={lam:.2f})')
     plt.title("Indian Carbon Price Pathways (Calibrated on Real EU Data)\nCapturing Actual Market Shocks")
     plt.xlabel("Trading Days (2 Years)")
@@ -180,3 +303,27 @@ if __name__ == "__main__":
     plt.grid(True, alpha=0.3)
     plt.savefig('risk_cone_real.png')
     print("Visualization saved to risk_cone_real.png")
+    
+    # --- STATISTICAL VALIDATION ---
+    print("\n--- RUNNING STATISTICAL VALIDATION MODULE ---")
+    
+    # 1. Calculate Real Returns for Testing
+    real_returns = np.log(df['Carbon_EU'] / df['Carbon_EU'].shift(1)).dropna()
+    
+    # 2. Init Validator 
+    # Note: We use the large 'sims' matrix for robust confidence intervals
+    # validator = StatisticalValidator(real_returns, sims)
+    validator = RigorousValidator(real_returns, sims)
+    
+    # 3. Run Hypothesis Tests
+    validator.run_normality_tests()
+    validator.run_goodness_of_fit()
+    
+    # 3b. Run Visual & Reality Checks (New Layer)
+    validator.run_qq_plot()
+    validator.run_3_sigma_test()
+    
+    # 4. Check Confidence on Valuation
+    # We validate the STEEL valuation (our primary export case)
+    steel_fv = steel_report['Final_Strategic_Price']
+    validator.calculate_valuation_confidence(steel_fv)
