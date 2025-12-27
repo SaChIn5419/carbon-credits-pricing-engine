@@ -1,7 +1,6 @@
 import numpy as np
+import real_data_calibration as rdc
 import matplotlib.pyplot as plt
-import pandas as pd
-from scipy.stats import norm
 
 class CarbonCreditValuator:
     def __init__(self, s0, mu, sigma, risk_free_rate=0.07):
@@ -37,6 +36,12 @@ class CarbonCreditValuator:
             # 2. Jump Component (Poisson Process) - The "Information Shock"
             # Logic: BEE releases new targets or EU CBAM rules change
             n_jumps = np.random.poisson(lambda_j * dt, n_sims)
+            # Handle potential scalar/nan issues
+            try:
+                if np.isnan(jump_mean): jump_mean = 0
+                if np.isnan(jump_std): jump_std = 0
+            except:
+                pass
             jump_magnitude = np.random.normal(jump_mean, jump_std, n_sims) * n_jumps
             
             # Combine: Previous Price * exp(Drift + Diffusion + Jumps)
@@ -62,9 +67,9 @@ class CarbonCreditValuator:
         return fair_value
 
 class StrategicAdvisor(CarbonCreditValuator):
-    def __init__(self, s0):
-        # Initialize with baseline Indian Market params (High Volatility due to new market)
-        super().__init__(s0, mu=0.05, sigma=0.60, risk_free_rate=0.07)
+    def __init__(self, s0, mu=0.05, sigma=0.60):
+        # Initialize with passed params (Real Data Calibration or Default)
+        super().__init__(s0, mu=mu, sigma=sigma, risk_free_rate=0.07)
         
         # Affinity Matrix: Geopolitical Friction Multipliers
         # > 1.0 means High Risk (Hostile/Strict), < 1.0 means Low Risk (Friendly)
@@ -93,10 +98,9 @@ class StrategicAdvisor(CarbonCreditValuator):
             
         return fair_value, "HOLD"
 
-    def get_strategic_price(self, target_market, sector_type):
+    def get_strategic_price(self, target_market, sector_type, lambda_j=0.33):
         # 1. Base Quant Valuation (Merton Model)
-        # Intensity 0.33 = 1 shock every 3 years (Indian Compliance Cycle)
-        base_fv = self.calculate_fair_value(T=2.0, lambda_j=0.33) 
+        base_fv = self.calculate_fair_value(T=2.0, lambda_j=lambda_j) 
         
         # 2. Apply Geopolitical Friction
         friction = self.geopolitics.get(target_market, 1.0)
@@ -113,15 +117,41 @@ class StrategicAdvisor(CarbonCreditValuator):
         }
 
 if __name__ == "__main__":
-    # --- EXECUTION: SIMULATING THE 2026 MARKET LAUNCH ---
+    print("--- STARTING CARBON VALUATION PIPELINE ---")
+    
+    # 1. PIPELINE STEP 1: Fetch/Load Real Market Data
+    df = rdc.fetch_real_market_data()
+    
+    if df.empty:
+        print("CRITICAL ERROR: No market data found. Cannot calibrate.")
+        exit(1)
+        
+    # 2. PIPELINE STEP 2: Calibrate Parameters from History
+    # We use the EU data (proxy) to find the 'Physics' of the market (Sigma, Lambda)
+    sigma, lam, j_mean, j_std, mu_proxy = rdc.calibrate_model_params(df['Carbon_EU'])
+    
+    print(f"\n--- PIPELINE CALIBRATION COMPLETE ---")
+    print(f"Using Real-World Volatility: {sigma:.2%}")
+    print(f"Using Real-World Shock Intensity: {lam:.2f} / year")
+    
+    # 3. PIPELINE STEP 3: Initialize Strategic Advisor with Real Params
+    # Scenario: Current Shadow Price is 1500 INR
+    # We use a conservative Indian growth drift (5%) but REAL volatility
+    Indian_Spot_Price = 1500
+    Indian_Mu = 0.05
+    
+    advisor = StrategicAdvisor(s0=Indian_Spot_Price, mu=Indian_Mu, sigma=sigma)
 
-    # Scenario: Current Shadow Price is ₹1,500
-    advisor = StrategicAdvisor(s0=1500)
+    # 3b. PIPELINE Output: Save Calibration Evidence
+    print("\nGenerating Calibration Check Chart...")
+    # Run a quick 1-year sim just for the calibration comparison chart
+    calib_sims = advisor.merton_jump_diffusion_simulation(T=1.0, dt=1/252, lambda_j=lam, jump_mean=j_mean, jump_std=j_std, n_sims=100)
+    rdc.visualize_calibration(df, calib_sims, sigma, lam)
 
-    print("--- STRATEGIC CARBON VALUATION REPORT (INDIA CCTS) ---")
+    print("\n--- STRATEGIC CARBON VALUATION REPORT (INDIA CCTS) ---")
 
     # Case A: Tata Steel (Exports to Europe)
-    steel_report = advisor.get_strategic_price(target_market="EU", sector_type="Export_Heavy")
+    steel_report = advisor.get_strategic_price(target_market="EU", sector_type="Export_Heavy", lambda_j=lam)
     print(f"\nSector: STEEL (Export Heavy to EU)")
     print(f"Base Quant Value:     INR {steel_report['Model_Fair_Value']} (Jump-Diffusion)")
     print(f"Strategic Value:      INR {steel_report['Final_Strategic_Price']}")
@@ -129,24 +159,24 @@ if __name__ == "__main__":
     print(f"Reasoning:            EU CBAM acts as a 'Shadow Regulator', forcing compliance despite local friction.")
 
     # Case B: UltraTech Cement (Domestic Consumption)
-    cement_report = advisor.get_strategic_price(target_market="GlobalSouth", sector_type="Domestic_Only")
+    cement_report = advisor.get_strategic_price(target_market="GlobalSouth", sector_type="Domestic_Only", lambda_j=lam)
     print(f"\nSector: CEMENT (Domestic / Global South)")
     print(f"Base Quant Value:     INR {cement_report['Model_Fair_Value']} (Jump-Diffusion)")
     print(f"Strategic Value:      INR {cement_report['Final_Strategic_Price']}")
     print(f"Action:               {cement_report['Signal']}")
     print(f"Reasoning:            Market pricing in 30% probability of weak BEE enforcement ('Paper Tiger' scenario).")
 
-    # --- VISUALIZATION: THE "RISK CONE" ---
-    # Simulating paths to show the "Jumps" visually
-    sims = advisor.merton_jump_diffusion_simulation(T=2, dt=1/252, lambda_j=0.33, jump_mean=0.15, jump_std=0.1, n_sims=50)
+    # --- VISUALIZATION: THE "RISK CONE" WITH REAL DATA ---
+    print("\nGenerating Real-Data Risk Cone...")
+    sims = advisor.merton_jump_diffusion_simulation(T=2, dt=1/252, lambda_j=lam, jump_mean=j_mean, jump_std=j_std, n_sims=50)
 
     plt.figure(figsize=(10, 6))
     plt.plot(sims, color='green', alpha=0.1)
-    plt.plot(np.mean(sims, axis=1), color='black', linewidth=2, label='Expected Price Path')
-    plt.title("Indian Carbon Price Pathways (Jump-Diffusion Model)\nCapturing 3-Year Policy Cycle Shocks")
+    plt.plot(np.mean(sims, axis=1), color='black', linewidth=2, label=f'Expected Price Path (Real $\lambda$={lam:.2f})')
+    plt.title("Indian Carbon Price Pathways (Calibrated on Real EU Data)\nCapturing Actual Market Shocks")
     plt.xlabel("Trading Days (2 Years)")
     plt.ylabel("Price (INR/tCO2e)")
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.savefig('risk_cone.png')
-    print("\nVisualization saved to risk_cone.png")
+    plt.savefig('risk_cone_real.png')
+    print("Visualization saved to risk_cone_real.png")

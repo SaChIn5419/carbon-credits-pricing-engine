@@ -4,33 +4,43 @@ This project implements a **Carbon Credit Valuation Engine** specifically tailor
 
 ## Core Features
 
-1.  **Merton's Jump-Diffusion Model**: Simulates carbon price paths using Geometric Brownian Motion with Jumps (GBMPJ) to account for sudden policy shocks (e.g., EU CBAM announcements, BEE target changes).
-2.  **Geopolitical Friction Matrix**: Adjusts the base fair value based on the target market's affinity/hostility (EU, USA, Global South).
-3.  **Enforcement Risk Filter**: Accounts for the "Paper Tiger" risk – differentiating between export sectors (forced compliance via CBAM) and domestic sectors (potential for weak enforcement).
+1.  **Real-Data Pipeline**: Automatically fetches EU ETS (Proxy) and Coal India data to "calibrate" the model's physics (Volatility & Jump Intensity).
+2.  **Merton's Jump-Diffusion Model**: Simulates carbon price paths accounting for sudden policy shocks (e.g., BEE target changes).
+3.  **Data Caching**: Saves market data to `market_data_cache.csv` for faster subsequent runs and offline reliability.
+4.  **Strategic Advisor**: Adjusts fair value based on Geopolitics (EU/USA/Global South) and Enforcement Risk (Paper Tiger vs. CBAM).
 
 ## Project Structure
 
--   `carbon_valuation.py`: The main Python script containing the `CarbonCreditValuator` and `StrategicAdvisor` classes.
--   `risk_cone.png`: Generated visualization of Monte Carlo price simulations.
--   `requirements.txt`: List of Python dependencies.
--   `run_valuation.bat`: Helper script to run the model on Windows using Anaconda.
+-   `carbon_valuation.py`: **Main Pipeline.** Fetches data, calibrates model, runs valuation, and generates reports/charts.
+-   `real_data_calibration.py`: Helper module for fetching YFinance data and performing statistical calibration.
+-   `market_data_cache.csv`: Automatically created file storing historical market data.
+-   `risk_cone_real.png`: Visualization of projected Indian Carbon Price pathways.
+-   `calibration_chart.png`: Visualization comparing Real Data history vs. Model Forecast.
+-   `requirements.txt`: Python dependencies.
+-   `run_valuation.bat`: One-click runner for Windows.
 
 ## How to Run
 
-1.  Ensure you have **Python** (or Anaconda) installed.
-2.  Install dependencies:
+1.  **Install Dependencies**:
     ```bash
     pip install -r requirements.txt
     ```
-3.  Run the valuation script:
+2.  **Run the Pipeline**:
+    Double-click `run_valuation.bat` 
+    OR run:
     ```bash
     python carbon_valuation.py
     ```
-    Or simply double-click `run_valuation.bat`.
 
-## Model Parameters
+## Logic Flow
 
--   **Spot Price ($S_0$)**: Current proxy price (e.g., ₹1500).
--   **Jump Intensity ($\lambda$)**: Set to 0.33 (one shock every 3 years) to match the ICAP compliance cycle.
--   **Drift ($\mu$)**: 5% (Abatement cost inflation).
--   **Volatility ($\sigma$)**: 60% (High volatility for new markets).
+1.  **Fetch**: Checks `market_data_cache.csv`. If missing, downloads `KEUA` (EU Carbon ETF) and `COALINDIA.NS` from Yahoo Finance.
+2.  **Calibrate**: Calculates Annual Volatility ($\sigma$) and Jump Intensity ($\lambda$) from the downloaded history.
+3.  **Simulate**: Uses these real-world parameters to simulate thousands of scenarios for the Indian market starting at ₹1500.
+4.  **Evaluate**: Applies "Realpolitik" filters (Sector Type + Target Market) to give a final Buy/Sell signal.
+
+## Interpretation of Outputs
+
+-   **Base Quant Value**: The theoretical price based on pure math (Merton Model).
+-   **Strategic Value**: The real-world price adjusted for political friction and compliance mandates.
+-   **Action**: `STRONG BUY` (Mandatory compliance sectors like Steel) vs `CAUTION` (Domestic sectors with weak enforcement).
